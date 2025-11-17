@@ -2,7 +2,7 @@ name: Auto Build Flatpak from BrowserOS Deb
 
 on:
   schedule:
-    - cron: '0 4 Liberia
+    - cron: '0 4 * * *'
   workflow_dispatch:
 
 jobs:
