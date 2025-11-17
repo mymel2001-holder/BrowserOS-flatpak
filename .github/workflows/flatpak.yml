@@ -54,15 +54,26 @@ jobs:
           flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
           flatpak install --user -y flathub org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08
 
-      # The cleanest possible extraction – pure ar + tar, no temporary files
-      - name: Extract usr/ contents directly from .deb
+      - name: Extract usr/ contents directly from .deb (fixed)
         if: steps.check.outputs.skip != 'true'
         run: |
-          # Extract only data.tar.* from the .deb and pipe directly to tar
-          ar t browseros.deb data.tar* | head -1 | xargs ar p browseros.deb | tar -xzf - --strip-components=2 -C . ./usr
-
-          # Create final archive that contains exactly what we want in /app
-          tar -czf browseros-app.tar.gz .
+          # List contents to find data archive
+          ar t browseros.deb
+          # Extract data archive (data.tar.xz or data.tar.gz)
+          ar x browseros.deb data.tar.xz 2>/dev/null || ar x browseros.deb data.tar.gz 2>/dev/null || ar x browseros.deb data.tar 2>/dev/null
+          # Detect and extract it (handles gz/xz/plain tar)
+          if [ -f data.tar.xz ]; then
+            tar -xf data.tar.xz
+          elif [ -f data.tar.gz ]; then
+            tar -xzf data.tar.gz
+          elif [ -f data.tar ]; then
+            tar -xf data.tar
+          else
+            echo "Error: No data.tar* found"
+            exit 1
+          fi
+          # Create final archive with /usr contents directly in root
+          tar -czf browseros-app.tar.gz usr
 
       - name: Create Flatpak manifest
         if: steps.check.outputs.skip != 'true'
@@ -82,7 +93,7 @@ jobs:
               "--device=dri",
               "--socket=pulseaudio",
               "--filesystem=home",
-              "--filesystemystem=host",
+              "--filesystem=host",
               "--talk-name=org.freedesktop.secrets",
               "--device=shm"
             ],
