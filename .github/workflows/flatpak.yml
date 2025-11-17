@@ -2,7 +2,7 @@ name: Auto Build Flatpak from BrowserOS Deb
 
 on:
   schedule:
-    - cron: '0 3 * * *'  # Daily at 3 AM UTC
+    - cron: '0 3 * * *'
   workflow_dispatch:
 
 jobs:
@@ -24,12 +24,11 @@ jobs:
               repo: 'BrowserOS'
             });
             const deb = release.assets.find(a => a.name.endsWith('.deb'));
-            if (!deb) core.setFailed('No .deb found in latest release');
+            if (!deb) core.setFailed('No .deb asset found');
             core.setOutput('version', release.tag_name.replace(/^v/, ''));
             core.setOutput('deb_url', deb.browser_download_url);
-            core.setOutput('deb_name', deb.name);
 
-      - name: Skip if already released
+      - name: Check if already released
         id: check
         uses: actions/github-script@v7
         with:
@@ -39,20 +38,20 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo
             });
-            core.setOutput('skip', data.some(r => r.tag_name === tag) ? 'true' : 'false');
+            core.setOutput('skip', data.some(r => r.tag_name === tag));
 
       - name: Download .deb
         if: steps.check.outputs.skip != 'true'
         run: |
           curl -L -o deb.deb "${{ steps.browseros.outputs.deb_url }}"
 
-      - name: Install build tools
-        if: steps.check.outputs.skip != 'true'
+      - name: Install Flatpak + dependencies
+        if: steps.checkuned outputs.skip != 'true'
         run: |
           sudo apt update
-          sudo apt install -y flatpak flatpak-builder elfutils dpkg
+          sudo apt install -y flatpak flatpak-builder elfutils
 
-      - name: Install Freedesktop runtime & SDK (user installation)
+      - name: Add Flathub (user) and install runtime/SDK
         if: steps.check.outputs.skip != 'true'
         run: |
           flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
@@ -60,7 +59,7 @@ jobs:
             org.freedesktop.Platform//25.08 \
             org.freedesktop.Sdk//25.08
 
-      - name: Create Flatpak manifest
+      - name: Create manifest
         if: steps.check.outputs.skip != 'true'
         run: |
           cat > ai.browseros.BrowserOS.json << 'EOF'
@@ -82,7 +81,16 @@ jobs:
               "--talk-name=org.freedesktop.secrets",
               "--device=shm"
             ],
+            "cleanup": [ "/opt" ],
             "modules": [
+              {
+                "name": "dpkg",
+                "buildsystem": "simple",
+                "build-commands": [
+                  "apt update",
+                  "apt install -y dpkg"
+                ]
+              },
               {
                 "name": "browseros",
                 "buildsystem": "simple",
@@ -102,7 +110,7 @@ jobs:
           }
           EOF
 
-      - name: Build Flatpak bundle
+      - name: Build Flatpak
         if: steps.check.outputs.skip != 'true'
         run: |
           flatpak-builder --user --install --force-clean \
@@ -113,12 +121,12 @@ jobs:
             BrowserOS-${{ steps.browseros.outputs.version }}.flatpak \
             ai.browseros.BrowserOS
 
-      - name: Create Release
+      - name: Create GitHub Release
         if: steps.check.outputs.skip != 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: browseros-${{ steps.browseros.outputs.version }}
-          name: BrowserOS ${{ steps.browseros.outputs.version }} Flatpak
+          name: BrowserOS ${{ steps.browseros.outputs.version }} (Flatpak)
           body: |
-            Auto-converted Flatpak from official BrowserOS v${{ steps.browseros.outputs.version }} .deb
+            Auto-converted Flatpak from official BrowserOS .deb (v${{ steps.browseros.outputs.version }})
           files: BrowserOS-${{ steps.browseros.outputs.version }}.flatpak
