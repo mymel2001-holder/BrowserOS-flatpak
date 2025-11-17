@@ -12,10 +12,10 @@ jobs:
       contents: write
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Get latest BrowserOS release
+      - name: Get latest BrowserOS release info
         id: release
         uses: actions/github-script@v7
         with:
@@ -25,7 +25,7 @@ jobs:
               repo: 'BrowserOS'
             });
             const deb = data.assets.find(a => a.name.endsWith('.deb'));
-            if (!deb) core.setFailed('No .deb found');
+            if (!deb) core.setFailed('No .deb asset found');
             core.setOutput('version', data.tag_name.replace(/^v/, ''));
             core.setOutput('deb_url', deb.browser_download_url);
 
@@ -35,46 +35,36 @@ jobs:
         with:
           script: |
             const tag = `v${{ steps.release.outputs.version }}-flatpak`;
-            const { data } = await github.rest.repos.listReleases({
-              owner: context.repo.owner,
-              repo: context.repo.repo
-            });
+            const { data } = await github.rest.repos.listReleases({ owner: context.repo.owner, repo: context.repo.repo });
             core.setOutput('skip', data.some(r => r.tag_name === tag));
 
       - name: Download .deb
         if: steps.check.outputs.skip != 'true'
-        run: |
-          curl -L -o browseros.deb "${{ steps.release.outputs.deb_url }}"
+        run: curl -L -o browseros.deb "${{ steps.release.outputs.deb_url }}"
 
-      - name: Install required tools
+      - name: Install tools
         if: steps.check.outputs.skip != 'true'
         run: |
           sudo apt update
           sudo apt install -y flatpak flatpak-builder binutils
 
-      - name: Setup Flatpak (user mode)
+      - name: Setup Flatpak (user)
         if: steps.check.outputs.skip != 'true'
         run: |
           flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-          flatpak install --user -y flathub \
-            org.freedesktop.Platform//25.08 \
-            org.freedesktop.Sdk//25.08
+          flatpak install --user -y flathub org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08
 
-      - name: Extract real usr/ contents from .deb
+      # The cleanest possible extraction – pure ar + tar, no temporary files
+      - name: Extract usr/ contents directly from .deb
         if: steps.check.outputs.skip != 'true'
         run: |
-          # Extract data.tar.xz (or data.tar.gz) from the .deb
-          ar t browseros.deb
-          ar x browseros.deb data.tar*
+          # Extract only data.tar.* from the .deb and pipe directly to tar
+          ar t browseros.deb data.tar* | head -1 | xargs ar p browseros.deb | tar -xzf - --strip-components=2 -C . ./usr
 
-          # Extract the data archive
-          mkdir root
-          tar -xf data.tar* -C root
+          # Create final archive that contains exactly what we want in /app
+          tar -czf browseros-app.tar.gz .
 
-          # Create clean tarball containing only /usr contents
-          tar -czf browseros-usr.tar.gz -C root/usr .
-
-      - name: Create correct Flatpak manifest
+      - name: Create Flatpak manifest
         if: steps.check.outputs.skip != 'true'
         run: |
           cat > ai.browseros.BrowserOS.json << 'EOF'
@@ -92,7 +82,7 @@ jobs:
               "--device=dri",
               "--socket=pulseaudio",
               "--filesystem=home",
-              "--filesystem=host",
+              "--filesystemystem=host",
               "--talk-name=org.freedesktop.secrets",
               "--device=shm"
             ],
@@ -101,14 +91,11 @@ jobs:
                 "name": "browseros",
                 "buildsystem": "simple",
                 "sources": [
-                  {
-                    "type": "archive",
-                    "path": "browseros-usr.tar.gz"
-                  }
+                  { "type": "archive", "path": "browseros-app.tar.gz" }
                 ],
                 "build-commands": [
                   "mkdir -p /app",
-                  "tar -xzf browseros-usr.tar.gz -C /app/",
+                  "tar -xzf browseros-app.tar.gz -C /app/",
                   "chmod +x /app/bin/browseros",
                   "ln -sf /app/bin/browseros /app/bin/BrowserOS"
                 ]
@@ -117,26 +104,17 @@ jobs:
           }
           EOF
 
-      - name: Build Flatpak bundle
+      - name: Build Flatpak
         if: steps.check.outputs.skip != 'true'
         run: |
-          flatpak-builder --user --force-clean \
-            --install-deps-from=flathub \
-            build-dir ai.browseros.BrowserOS.json
+          flatpak-builder --user --force-clean --install-deps-from=flathub build-dir ai.browseros.BrowserOS.json
+          flatpak build-bundle build-dir BrowserOS-${{ steps.release.outputs.version }}.flatpak ai.browseros.BrowserOS
 
-          flatpak build-bundle build-dir \
-            BrowserOS-${{ steps.release.outputs.version }}.flatpak \
-            ai.browseros.BrowserOS
-
-      - name: Create GitHub Release
+      - name: Release
         if: steps.check.outputs.skip != 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.release.outputs.version }}-flatpak
-          name: BrowserOS ${{ steps.release.outputs.version }} (Flatpak)
-          body: |
-            Automatically built Flatpak from official BrowserOS .deb
-            
-            Version: ${{ steps.release.outputs.version }}
-            Source: https://github.com/browseros-ai/BrowserOS/releases/tag/v${{ steps.release.outputs.version }}
+          name: BrowserOS ${{ steps.release.outputs.version }} Flatpak
+          body: Automatically built Flatpak from official .deb
           files: BrowserOS-${{ steps.release.outputs.version }}.flatpak
