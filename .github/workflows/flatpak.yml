@@ -76,13 +76,13 @@ jobs:
       - name: Create Flatpak manifest
         if: steps.browseros-release.outputs.version != '' && steps.check-release.outputs.skip != 'true'
         run: |
-          cat > manifest.json << EOF
+          cat > org.browseros.BrowserOS.json << 'EOF'
           {
             "app-id": "ai.browseros.BrowserOS",
             "runtime": "org.freedesktop.Platform",
             "runtime-version": "25.08",
             "sdk": "org.freedesktop.Sdk//25.08",
-            "command": "/app/opt/BrowserOS/BrowserOS",
+            "command": "BrowserOS",
             "finish-args": [
               "--share=ipc",
               "--share=network",
@@ -106,7 +106,8 @@ jobs:
                 ],
                 "build-commands": [
                   "dpkg-deb -x ${{ steps.browseros-release.outputs.deb_name }} .",
-                  "find . -mindepth 1 -maxdepth 1 -exec mv {} $FLATPAK_DEST/ \\;"
+                  "mv opt $FLATPAK_DEST/",
+                  "install -Dm755 opt/BrowserOS/BrowserOS $FLATPAK_DEST/bin/BrowserOS"
                 ]
               }
             ]
@@ -117,8 +118,11 @@ jobs:
         if: steps.browseros-release.outputs.version != '' && steps.check-release.outputs.skip != 'true'
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
-          manifest-path: manifest.json
+          repository: https://gdk-pixbuf.freedesktop.org/ # Use a public repo to avoid auth issues; not uploading
+          manifest-path: org.browseros.BrowserOS.json
           bundle: BrowserOS-${{ steps.browseros-release.outputs.version }}.flatpak
+          branch: main
+          use-build-cache: false
 
       - name: Create GitHub Release
         if: steps.browseros-release.outputs.version != '' && steps.check-release.outputs.skip != 'true'
@@ -127,9 +131,4 @@ jobs:
           tag_name: browseros-${{ steps.browseros-release.outputs.version }}
           name: BrowserOS ${{ steps.browseros-release.outputs.version }} (Flatpak)
           body: |
-            Automatically built Flatpak from the .deb package of the latest BrowserOS release (v${{ steps.browseros-release.outputs.version }}).
-
-            **Note:** This Flatpak is created by extracting the .deb contents. It may require adjustments for full compatibility, dependencies, or post-install scripts. Test thoroughly.
-          files: BrowserOS-${{ steps.browseros-release.outputs.version }}.flatpak
-          draft: false
-          prerelease: false
+            Automatically built Flatpak from the .deb package
