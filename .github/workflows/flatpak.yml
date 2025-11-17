@@ -51,7 +51,7 @@ jobs:
         if: steps.check.outputs.skip != 'true'
         run: |
           sudo apt update
-          sudo apt install -y flatpak flatpak-builder elfutils
+          sudo apt install -y flatpak flatpak-builder elfutils dpkg-dev
 
       - name: Setup user Flatpak remote and install runtime/SDK
         if: steps.check.outputs.skip != 'true'
@@ -60,6 +60,14 @@ jobs:
           flatpak install --user -y flathub \
             org.freedesktop.Platform//25.08 \
             org.freedesktop.Sdk//25.08
+
+      - name: Extract .deb and prepare sources
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          mkdir -p extracted
+          dpkg-deb -x deb.deb extracted/
+          tar -cf browseros-sources.tar extracted/opt/BrowserOS/
+          rm -rf extracted
 
       - name: Create Flatpak manifest
         if: steps.check.outputs.skip != 'true'
@@ -85,26 +93,22 @@ jobs:
             ],
             "modules": [
               {
-                "name": "dpkg",
-                "buildsystem": "simple",
-                "build-commands": [
-                  "apt update",
-                  "apt install -y dpkg"
-                ]
-              },
-              {
                 "name": "browseros",
                 "buildsystem": "simple",
+                "sources": [
+                  {
+                    "type": "archive",
+                    "url": "browseros-sources.tar",
+                    "dest-filename": "browseros-sources.tar"
+                  }
+                ],
                 "build-commands": [
-                  "dpkg-deb -x deb.deb .",
+                  "tar -xf browseros-sources.tar",
                   "mkdir -p /app",
-                  "mv opt/BrowserOS/* /app/",
+                  "mv BrowserOS/* /app/",
                   "chmod +x /app/BrowserOS",
                   "mkdir -p /app/bin",
                   "ln -s ../BrowserOS /app/bin/BrowserOS"
-                ],
-                "sources": [
-                  { "type": "file", "path": "deb.deb" }
                 ]
               }
             ]
