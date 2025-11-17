@@ -2,16 +2,16 @@ name: Auto Build Flatpak from BrowserOS Deb
 
 on:
   schedule:
-    - cron: '0 2 * * *'
+    - cron: '0 3 * * *'  # Daily at 3 AM UTC
   workflow_dispatch:
 
 jobs:
   build-flatpak:
     runs-on: ubuntu-latest
     permissions:
-      contents: write          # Needed to create releases
+      contents: write
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Get latest BrowserOS release
@@ -19,62 +19,56 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const release = await github.rest.repos.getLatestRelease({
+            const { data: release } = await github.rest.repos.getLatestRelease({
               owner: 'browseros-ai',
               repo: 'BrowserOS'
             });
-            const deb = release.data.assets.find(a => a.name.endsWith('.deb'));
-            if (!deb) core.setFailed('No .deb asset found');
-            core.setOutput('version', release.data.tag_name.replace(/^v/, ''));
+            const deb = release.assets.find(a => a.name.endsWith('.deb'));
+            if (!deb) core.setFailed('No .deb found in latest release');
+            core.setOutput('version', release.tag_name.replace(/^v/, ''));
             core.setOutput('deb_url', deb.browser_download_url);
             core.setOutput('deb_name', deb.name);
 
-      - name: Check if Flatpak already released
+      - name: Skip if already released
         id: check
         uses: actions/github-script@v7
         with:
           script: |
             const tag = `browseros-${{ steps.browseros.outputs.version }}`;
-            try {
-              const releases = await github.rest.repos.listReleases({
-                owner: context.repo.owner,
-                repo: context.repo.repo
-              });
-              const exists = releases.data.some(r => r.tag_name === tag);
-              core.setOutput('skip', exists ? 'true' : 'false');
-            } catch (e) {
-              core.setOutput('skip', 'false');
-            }
+            const { data } = await github.rest.repos.listReleases({
+              owner: context.repo.owner,
+              repo: context.repo.repo
+            });
+            core.setOutput('skip', data.some(r => r.tag_name === tag) ? 'true' : 'false');
 
       - name: Download .deb
         if: steps.check.outputs.skip != 'true'
         run: |
-          curl -L -o "${{ steps.browseros.outputs.deb_name }}" "${{ steps.browseros.outputs.deb_url }}"
+          curl -L -o deb.deb "${{ steps.browseros.outputs.deb_url }}"
 
-      - name: Install Flatpak build dependencies
+      - name: Install build tools
         if: steps.check.outputs.skip != 'true'
         run: |
           sudo apt update
           sudo apt install -y flatpak flatpak-builder elfutils dpkg
 
-      - name: Add Flathub remote & install runtime/sdk
+      - name: Install Freedesktop runtime & SDK (user installation)
         if: steps.check.outputs.skip != 'true'
         run: |
-          flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-          flatpak install -y --noninteractive flathub \
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user -y flathub \
             org.freedesktop.Platform//25.08 \
             org.freedesktop.Sdk//25.08
 
       - name: Create Flatpak manifest
         if: steps.check.outputs.skip != 'true'
         run: |
-          cat > com.nodemixaholic.BrowserOS.json << 'EOF'
+          cat > ai.browseros.BrowserOS.json << 'EOF'
           {
-            "id": "com.nodemixaholic.BrowserOS",
+            "id": "ai.browseros.BrowserOS",
             "runtime": "org.freedesktop.Platform",
             "runtime-version": "25.08",
             "sdk": "org.freedesktop.Sdk",
-            "sdk-version": "25.08",
             "command": "BrowserOS",
             "finish-args": [
               "--share=ipc",
@@ -85,25 +79,23 @@ jobs:
               "--socket=pulseaudio",
               "--filesystem=home",
               "--filesystem=host",
-              "--talk-name=org.freedesktop.secrets"
+              "--talk-name=org.freedesktop.secrets",
+              "--device=shm"
             ],
             "modules": [
               {
                 "name": "browseros",
                 "buildsystem": "simple",
-                "sources": [
-                  {
-                    "type": "file",
-                    "path": "${{ steps.browseros.outputs.deb_name }}"
-                  }
-                ],
                 "build-commands": [
-                  "dpkg-deb -x ${{ steps.browseros.outputs.deb_name }} .",
-                  "mkdir -p /app/bin",
+                  "dpkg-deb -x deb.deb .",
+                  "mkdir -p /app",
                   "mv opt/BrowserOS/* /app/",
-                  "chmod +x /app/BrowseröS",
-                  "ln -s /app/BrowserOS /app/bin/BrowserOS",
-                  "rm -rf /app/*.deb"  # cleanup
+                  "chmod +x /app/BrowserOS",
+                  "mkdir -p /app/bin",
+                  "ln -s ../BrowserOS /app/bin/BrowserOS"
+                ],
+                "sources": [
+                  { "type": "file", "path": "deb.deb" }
                 ]
               }
             ]
@@ -113,18 +105,20 @@ jobs:
       - name: Build Flatpak bundle
         if: steps.check.outputs.skip != 'true'
         run: |
-          flatpak-builder --user --install-deps-from=flathub --force-clean build-dir com.nodemixaholic.BrowserOS.json
-          flatpak build-bundle build-dir BrowserOS-${{ steps.browseros.outputs.version }}.flatpak com.nodemixaholic.BrowserOS
+          flatpak-builder --user --install --force-clean \
+            --install-deps-from=flathub \
+            build-dir ai.browseros.BrowserOS.json
 
-      - name: Upload Flatpak to new release
+          flatpak build-bundle build-dir \
+            BrowserOS-${{ steps.browseros.outputs.version }}.flatpak \
+            ai.browseros.BrowserOS
+
+      - name: Create Release
         if: steps.check.outputs.skip != 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: browseros-${{ steps.browseros.outputs.version }}
-          name: BrowserOS ${{ steps.browseros.outputs.version }} (Flatpak)
+          name: BrowserOS ${{ steps.browseros.outputs.version }} Flatpak
           body: |
-            Automatically converted from the official BrowserOS .deb release.
-            Source: https://github.com/browseros-ai/BrowserOS/releases/tag/v${{ steps.browseros.outputs.version }}
+            Auto-converted Flatpak from official BrowserOS v${{ steps.browseros.outputs.version }} .deb
           files: BrowserOS-${{ steps.browseros.outputs.version }}.flatpak
-          draft: false
-          prerelease: false
