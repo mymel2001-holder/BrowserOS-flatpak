@@ -15,7 +15,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Get latest BrowserOS release info
+      - name: Get latest BrowserOS release
         id: release
         uses: actions/github-script@v7
         with:
@@ -42,11 +42,12 @@ jobs:
         if: steps.check.outputs.skip != 'true'
         run: curl -L -o browseros.deb "${{ steps.release.outputs.deb_url }}"
 
-      - name: Install tools
+      # zstd is required for modern .deb files (data.tar.zst)
+      - name: Install tools (including zstd)
         if: steps.check.outputs.skip != 'true'
         run: |
           sudo apt update
-          sudo apt install -y flatpak flatpak-builder binutils
+          sudo apt install -y flatpak flatpak-builder binutils zstd
 
       - name: Setup Flatpak (user)
         if: steps.check.outputs.skip != 'true'
@@ -54,25 +55,16 @@ jobs:
           flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
           flatpak install --user -y flathub org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08
 
-      - name: Extract usr/ contents directly from .deb (fixed)
+      - name: Extract usr/ from data.tar.zst and repack
         if: steps.check.outputs.skip != 'true'
         run: |
-          # List contents to find data archive
-          ar t browseros.deb
-          # Extract data archive (data.tar.xz or data.tar.gz)
-          ar x browseros.deb data.tar.xz 2>/dev/null || ar x browseros.deb data.tar.gz 2>/dev/null || ar x browseros.deb data.tar 2>/dev/null
-          # Detect and extract it (handles gz/xz/plain tar)
-          if [ -f data.tar.xz ]; then
-            tar -xf data.tar.xz
-          elif [ -f data.tar.gz ]; then
-            tar -xzf data.tar.gz
-          elif [ -f data.tar ]; then
-            tar -xf data.tar
-          else
-            echo "Error: No data.tar* found"
-            exit 1
-          fi
-          # Create final archive with /usr contents directly in root
+          # Extract the zstd-compressed data archive
+          ar x browseros.deb data.tar.zst
+
+          # Decompress and extract in one step
+          zstd -d --stdout data.tar.zst | tar -xf - 
+
+          # Repack just the usr/ directory into a clean gzip tarball for Flatpak
           tar -czf browseros-app.tar.gz usr
 
       - name: Create Flatpak manifest
@@ -115,17 +107,18 @@ jobs:
           }
           EOF
 
-      - name: Build Flatpak
+      - name: Build Flatpak bundle
         if: steps.check.outputs.skip != 'true'
         run: |
           flatpak-builder --user --force-clean --install-deps-from=flathub build-dir ai.browseros.BrowserOS.json
           flatpak build-bundle build-dir BrowserOS-${{ steps.release.outputs.version }}.flatpak ai.browseros.BrowserOS
 
-      - name: Release
+      - name: Create Release
         if: steps.check.outputs.skip != 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.release.outputs.version }}-flatpak
-          name: BrowserOS ${{ steps.release.outputs.version }} Flatpak
-          body: Automatically built Flatpak from official .deb
+          name: BrowserOS ${{ steps.release.outputs.version }} (Flatpak)
+          body: |
+            Automatically built Flatpak from official BrowserOS .deb (v${{ steps.release.outputs.version }})
           files: BrowserOS-${{ steps.release.outputs.version }}.flatpak
