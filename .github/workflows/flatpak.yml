@@ -68,11 +68,11 @@ jobs:
           # Fix desktop file
           sed 's/^Name=.*/Name=BrowserOS AI/' \
               usr/share/applications/browseros.desktop \
-              > export/share/applications/ai.browseros.BrowserOS.desktop
+              > export/share/applications/com.nodemixaholic.BrowserOSFlatpak.desktop
 
           # Fix icon
           cp usr/share/icons/hicolor/256x256/apps/browseros.png \
-             export/share/icons/hicolor/256x256/apps/ai.browseros.BrowserOS.png
+             export/share/icons/hicolor/256x256/apps/com.nodemixaholic.BrowserOSFlatpak.png
 
           # Create clean tarball: usr/ → app/
           tar -czf app-contents.tar.gz \
@@ -82,9 +82,9 @@ jobs:
       - name: Create final Flatpak manifest
         if: steps.check.outputs.skip != 'true'
         run: |
-          cat > ai.browseros.BrowserOS.json << 'EOF'
+          cat > com.nodemixaholic.BrowserOSFlatpak.json << 'EOF'
           {
-            "id": "ai.browseros.BrowserOS",
+            "id": "com.nodemixaholic.BrowserOSFlatpak",
             "runtime": "org.freedesktop.Platform",
             "runtime-version": "25.08",
             "sdk": "org.freedesktop.Sdk",
@@ -117,12 +117,12 @@ jobs:
                   },
                   {
                     "type": "file",
-                    "path": "export/share/applications/ai.browseros.BrowserOS.desktop",
+                    "path": "export/share/applications/com.nodemixaholic.BrowserOSFlatpak.desktop",
                     "dest": "share/applications/"
                   },
                   {
                     "type": "file",
-                    "path": "export/share/icons/hicolor/256x256/apps/ai.browseros.BrowserOS.png",
+                    "path": "export/share/icons/hicolor/256x256/apps/com.nodemixaholic.BrowserOSFlatpak.png",
                     "dest": "share/icons/hicolor/256x256/apps/"
                   }
                 ]
@@ -137,11 +137,11 @@ jobs:
           flatpak-builder --user --force-clean \
             --install-deps-from=flathub \
             --repo=repo \
-            build-dir ai.browseros.BrowserOS.json
+            build-dir com.nodemixaholic.BrowserOSFlatpak.json
 
           flatpak build-bundle repo \
-            BrowserOS-${{ steps.release.outputs.version }}.flatpak \
-            ai.browseros.BrowserOS
+            BrowserOS-unofficial.flatpak \
+            com.nodemixaholic.BrowserOSFlatpak
 
       - name: Release
         if: steps.check.outputs.skip != 'true'
@@ -151,7 +151,7 @@ jobs:
           name: BrowserOS ${{ steps.release.outputs.version }} (Flatpak)
           body: |
             Fully automated, clean Flatpak build from official .deb
-            • Proper app ID: ai.browseros.BrowserOS
+            • Proper app ID: com.nodemixaholic.BrowserOSFlatpak
             • Working launcher and icon
             • No warnings or errors
-          files: BrowserOS-${{ steps.release.outputs.version }}.flatpak
+          files: BrowserOS-unofficial.flatpak
