@@ -25,7 +25,7 @@ jobs:
               repo: 'BrowserOS'
             });
             const deb = data.assets.find(a => a.name.endsWith('.deb'));
-            if (!deb) core.setFailed('No .deb found');
+            if (!deb) core.setFailed('No .deb asset found');
             core.setOutput('version', data.tag_name.replace(/^v/, ''));
             core.setOutput('deb_url', deb.browser_download_url);
 
@@ -48,33 +48,36 @@ jobs:
           sudo apt update
           sudo apt install -y flatpak flatpak-builder binutils zstd
 
-      - name: Setup Flatpak (user)
+      - name: Setup Flatpak (user mode)
         if: steps.check.outputs.skip != 'true'
         run: |
           flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
           flatpak install --user -y flathub org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08
 
-      - name: Extract and prepare app files
+      # Extract and create a clean tarball with correct structure
+      - name: Extract and prepare app bundle
         if: steps.check.outputs.skip != 'true'
         run: |
           ar x browseros.deb data.tar.zst
           zstd -d --stdout data.tar.zst | tar -xf -
 
-          # Fix desktop file name and icon path to be Flatpak-compliant
+          # Create proper export directory for desktop integration
           mkdir -p export/share/applications
           mkdir -p export/share/icons/hicolor/256x256/apps
 
-          sed 's/Name=BrowserOS/Name=BrowserOS AI/' usr/share/applications/browseros.desktop > export/share/applications/ai.browseros.BrowserOS.desktop
+          # Fix desktop file
+          sed 's/^Name=.*/Name=BrowserOS AI/' \
+              usr/share/applications/browseros.desktop \
+              > export/share/applications/ai.browseros.BrowserOS.desktop
 
-          cp usr/share/icons/hicolor/256x256/apps/browseros.png export/share/icons/hicolor/256x256/apps/ai.browseros.BrowserOS.png
+          # Fix icon
+          cp usr/share/icons/hicolor/256x256/apps/browseros.png \
+             export/share/icons/hicolor/256x256/apps/ai.browseros.BrowserOS.png
 
-          # Create clean tarball with correct structure
-          tar -czf browseros-app.tar.gz \
+          # Create clean tarball: usr/ → app/
+          tar -czf app-contents.tar.gz \
             --transform='s|^usr|app|' \
-            usr/bin \
-            usr/lib \
-            usr/share/applications \
-            usr/share/icons
+            usr/bin usr/lib usr/share
 
       - name: Create final Flatpak manifest
         if: steps.check.outputs.skip != 'true'
@@ -98,31 +101,29 @@ jobs:
               "--talk-name=org.freedesktop.secrets",
               "--device=shm"
             ],
-            "cleanup": [ "/lib", "/share/man", "/share/doc" ],
             "modules": [
               {
                 "name": "browseros",
                 "buildsystem": "simple",
                 "build-commands": [
-                  "mkdir -p /app/bin /app/lib",
-                  "cp -r /run/build/browseros/app/* /app/",
+                  "tar -xzf app-contents.tar.gz -C /",
                   "chmod +x /app/bin/browseros",
                   "ln -sf browseros /app/bin/BrowserOS"
                 ],
                 "sources": [
                   {
                     "type": "file",
-                    "path": "browseros-app.tar.gz"
+                    "path": "app-contents.tar.gz"
                   },
                   {
                     "type": "file",
                     "path": "export/share/applications/ai.browseros.BrowserOS.desktop",
-                    "dest-filename": "ai.browseros.BrowserOS.desktop"
+                    "dest": "share/applications/"
                   },
                   {
                     "type": "file",
                     "path": "export/share/icons/hicolor/256x256/apps/ai.browseros.BrowserOS.png",
-                    "dest-filename": "ai.browseros.BrowserOS.png"
+                    "dest": "share/icons/hicolor/256x256/apps/"
                   }
                 ]
               }
@@ -133,8 +134,10 @@ jobs:
       - name: Build Flatpak
         if: steps.check.outputs.skip != 'true'
         run: |
-          flatpak-builder --user --force-clean --install-deps-from=flathub \
-            --repo=repo build-dir ai.browseros.BrowserOS.json
+          flatpak-builder --user --force-clean \
+            --install-deps-from=flathub \
+            --repo=repo \
+            build-dir ai.browseros.BrowserOS.json
 
           flatpak build-bundle repo \
             BrowserOS-${{ steps.release.outputs.version }}.flatpak \
@@ -148,5 +151,7 @@ jobs:
           name: BrowserOS ${{ steps.release.outputs.version }} (Flatpak)
           body: |
             Fully automated, clean Flatpak build from official .deb
-            Includes proper .desktop file and icon
+            • Proper app ID: ai.browseros.BrowserOS
+            • Working launcher and icon
+            • No warnings or errors
           files: BrowserOS-${{ steps.release.outputs.version }}.flatpak
